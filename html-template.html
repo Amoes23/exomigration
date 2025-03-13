@@ -1,0 +1,353 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Exchange Online Migration Report - {{BATCH_NAME}}</title>
+    <style>
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            line-height: 1.6;
+            color: #333;
+            margin: 0;
+            padding: 20px;
+            background-color: #f0f6fc;
+        }
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            background-color: #fff;
+            padding: 20px;
+            box-shadow: 0 0 15px rgba(0,0,0,0.1);
+            border-radius: 8px;
+        }
+        h1, h2, h3 {
+            color: #0078d4;
+        }
+        h1 {
+            border-bottom: 2px solid #0078d4;
+            padding-bottom: 10px;
+            margin-top: 0;
+        }
+        .company-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 20px;
+        }
+        .company-logo {
+            height: 50px;
+            background-color: #f0f0f0;
+            padding: 10px;
+            border-radius: 5px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: bold;
+        }
+        .summary {
+            background-color: #f0f8ff;
+            padding: 20px;
+            border-radius: 8px;
+            margin-bottom: 30px;
+            border-left: 5px solid #0078d4;
+        }
+        .status-ready {
+            background-color: #dff0d8;
+            color: #3c763d;
+            padding: 5px 10px;
+            border-radius: 3px;
+            font-weight: bold;
+        }
+        .status-warning {
+            background-color: #fcf8e3;
+            color: #8a6d3b;
+            padding: 5px 10px;
+            border-radius: 3px;
+            font-weight: bold;
+        }
+        .status-failed {
+            background-color: #f2dede;
+            color: #a94442;
+            padding: 5px 10px;
+            border-radius: 3px;
+            font-weight: bold;
+        }
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin: 20px 0;
+            box-shadow: 0 0 10px rgba(0,0,0,0.05);
+        }
+        th, td {
+            text-align: left;
+            padding: 12px 15px;
+            border-bottom: 1px solid #ddd;
+        }
+        th {
+            background-color: #0078d4;
+            color: white;
+        }
+        tr:nth-child(even) {
+            background-color: #f9f9f9;
+        }
+        tr:hover {
+            background-color: #f1f1f1;
+        }
+        .mailbox-details {
+            margin-top: 20px;
+            margin-bottom: 30px;
+            border: 1px solid #ddd;
+            border-radius: 8px;
+            overflow: hidden;
+            box-shadow: 0 0 10px rgba(0,0,0,0.05);
+        }
+        .mailbox-details h3 {
+            margin: 0;
+            padding: 15px;
+            background-color: #e9ecef;
+            border-bottom: 1px solid #ddd;
+        }
+        .mailbox-details-content {
+            padding: 15px;
+        }
+        .detail-row {
+            display: flex;
+            margin-bottom: 8px;
+            border-bottom: 1px solid #eee;
+            padding-bottom: 8px;
+        }
+        .detail-label {
+            width: 30%;
+            font-weight: bold;
+        }
+        .detail-value {
+            width: 70%;
+        }
+        .error-list, .warning-list {
+            margin-top: 10px;
+            padding-left: 20px;
+        }
+        .error-list li {
+            color: #a94442;
+        }
+        .warning-list li {
+            color: #8a6d3b;
+        }
+        .badge {
+            display: inline-block;
+            min-width: 10px;
+            padding: 3px 7px;
+            font-size: 12px;
+            font-weight: 700;
+            line-height: 1;
+            color: #fff;
+            text-align: center;
+            white-space: nowrap;
+            vertical-align: middle;
+            background-color: #777;
+            border-radius: 10px;
+        }
+        .badge-success {
+            background-color: #5cb85c;
+        }
+        .badge-warning {
+            background-color: #f0ad4e;
+        }
+        .badge-danger {
+            background-color: #d9534f;
+        }
+        .timestamp {
+            color: #777;
+            font-style: italic;
+            margin-top: 30px;
+            text-align: center;
+        }
+        .error-code {
+            display: inline-block;
+            background-color: #f8d7da;
+            color: #721c24;
+            padding: 0px 5px;
+            border-radius: 3px;
+            font-family: monospace;
+            margin-right: 5px;
+        }
+        .action-required {
+            background-color: #f8d7da;
+            color: #721c24;
+            padding: 15px;
+            border-radius: 8px;
+            margin-top: 20px;
+            border-left: 5px solid #721c24;
+        }
+        .tabs {
+            display: flex;
+            margin-top: 20px;
+            border-bottom: 1px solid #ddd;
+        }
+        .tab {
+            padding: 10px 15px;
+            cursor: pointer;
+            background-color: #f1f1f1;
+            border: 1px solid #ddd;
+            border-bottom: none;
+            margin-right: 5px;
+            border-top-left-radius: 5px;
+            border-top-right-radius: 5px;
+            position: relative;
+            top: 1px;
+            transition: all 0.3s ease;
+        }
+        .tab.active {
+            background-color: white;
+            border-bottom: 1px solid white;
+            font-weight: bold;
+        }
+        .tab:hover:not(.active) {
+            background-color: #e0e0e0;
+        }
+        .tab-content {
+            display: none;
+            padding: 15px 0;
+        }
+        .tab-content.active {
+            display: block;
+        }
+        .progress-container {
+            display: flex;
+            justify-content: space-between;
+            margin: 20px 0;
+            position: relative;
+        }
+        .progress-container::before {
+            content: '';
+            position: absolute;
+            background: #ddd;
+            height: 4px;
+            width: 100%;
+            top: 15px;
+            left: 0;
+            z-index: 1;
+        }
+        .progress-step {
+            position: relative;
+            z-index: 2;
+            text-align: center;
+            width: 33%;
+        }
+        .progress-step-icon {
+            width: 30px;
+            height: 30px;
+            border-radius: 50%;
+            background-color: #ddd;
+            margin: 0 auto 5px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: bold;
+        }
+        .progress-step.active .progress-step-icon, 
+        .progress-step.completed .progress-step-icon {
+            background-color: #0078d4;
+            color: white;
+        }
+        .progress-step-text {
+            font-size: 12px;
+            color: #666;
+        }
+        .progress-step.active .progress-step-text, 
+        .progress-step.completed .progress-step-text {
+            color: #0078d4;
+            font-weight: bold;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="company-header">
+            <h1>Exchange Online Migration Report</h1>
+            <div class="company-logo">CONTOSO</div>
+        </div>
+        
+        <div class="progress-container">
+            <div class="progress-step completed">
+                <div class="progress-step-icon">1</div>
+                <div class="progress-step-text">Validation</div>
+            </div>
+            <div class="progress-step active">
+                <div class="progress-step-icon">2</div>
+                <div class="progress-step-text">Migration</div>
+            </div>
+            <div class="progress-step">
+                <div class="progress-step-icon">3</div>
+                <div class="progress-step-text">Completion</div>
+            </div>
+        </div>
+        
+        <div class="summary">
+            <h2>Migration Batch: {{BATCH_NAME}}</h2>
+            <p><strong>Report Generated:</strong> {{TIMESTAMP}}</p>
+            <p><strong>Total Mailboxes:</strong> {{TOTAL_COUNT}}</p>
+            <p><strong>Ready for Migration:</strong> <span class="badge badge-success">{{READY_COUNT}}</span></p>
+            <p><strong>Warnings:</strong> <span class="badge badge-warning">{{WARNING_COUNT}}</span></p>
+            <p><strong>Failed:</strong> <span class="badge badge-danger">{{FAILED_COUNT}}</span></p>
+            {{BATCH_DETAILS}}
+        </div>
+        
+        <div class="tabs">
+            <div class="tab active" onclick="openTab(event, 'summary-tab')">Summary</div>
+            <div class="tab" onclick="openTab(event, 'details-tab')">Detailed Results</div>
+            <div class="tab" onclick="openTab(event, 'actions-tab')">Action Items</div>
+        </div>
+        
+        <div id="summary-tab" class="tab-content active">
+            <h2>Mailbox Summary</h2>
+            <table>
+                <thead>
+                    <tr>
+                        <th>Email Address</th>
+                        <th>Display Name</th>
+                        <th>Mailbox Size (GB)</th>
+                        <th>Status</th>
+                        <th>Issues</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {{TABLE_ROWS}}
+                </tbody>
+            </table>
+        </div>
+        
+        <div id="details-tab" class="tab-content">
+            <h2>Detailed Results</h2>
+            {{MAILBOX_DETAILS}}
+        </div>
+        
+        <div id="actions-tab" class="tab-content">
+            <h2>Action Items</h2>
+            {{ACTION_ITEMS}}
+        </div>
+        
+        <p class="timestamp">Generated by Exchange Online Migration Script v{{VERSION}}</p>
+    </div>
+    
+    <script>
+    function openTab(evt, tabName) {
+        var i, tabContent, tabLinks;
+        
+        tabContent = document.getElementsByClassName("tab-content");
+        for (i = 0; i < tabContent.length; i++) {
+            tabContent[i].className = tabContent[i].className.replace(" active", "");
+        }
+        
+        tabLinks = document.getElementsByClassName("tab");
+        for (i = 0; i < tabLinks.length; i++) {
+            tabLinks[i].className = tabLinks[i].className.replace(" active", "");
+        }
+        
+        document.getElementById(tabName).className += " active";
+        evt.currentTarget.className += " active";
+    }
+    </script>
+</body>
+</html>
