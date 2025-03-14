@@ -6,6 +6,7 @@ function Test-MailboxFolderStructure {
     .DESCRIPTION
         Analyzes a mailbox's folder structure to identify deeply nested folders
         and folders with large item counts that may cause problems during migration.
+        Works with both on-premises Exchange and Exchange Online mailboxes.
     
     .PARAMETER EmailAddress
         The email address of the mailbox to test.
@@ -13,9 +14,17 @@ function Test-MailboxFolderStructure {
     .PARAMETER Results
         A PSCustomObject that collects the validation results.
     
+    .PARAMETER OnPremises
+        When specified, treats the mailbox as an on-premises mailbox.
+        Otherwise, assumes Exchange Online mailbox.
+    
     .EXAMPLE
         $results = New-MailboxTestResult -EmailAddress "user@contoso.com"
         Test-MailboxFolderStructure -EmailAddress "user@contoso.com" -Results $results
+    
+    .EXAMPLE
+        $results = New-MailboxTestResult -EmailAddress "user@contoso.com"
+        Test-MailboxFolderStructure -EmailAddress "user@contoso.com" -Results $results -OnPremises
     
     .OUTPUTS
         [bool] Returns $true if the test was successful (even if issues were found), $false if the test failed.
@@ -26,32 +35,58 @@ function Test-MailboxFolderStructure {
         [string]$EmailAddress,
         
         [Parameter(Mandatory = $true)]
-        [PSCustomObject]$Results
+        [PSCustomObject]$Results,
+        
+        [Parameter(Mandatory = $false)]
+        [switch]$OnPremises
     )
     
     try {
-        Write-Log -Message "Checking mailbox folder structure: $EmailAddress" -Level "INFO"
+        $envType = if ($OnPremises) { "on-premises" } else { "Exchange Online" }
+        Write-Log -Message "Checking $envType mailbox folder structure: $EmailAddress" -Level "INFO"
         
-        # Get folder statistics
+        # Get folder statistics - works in both environments
         $folderStats = Get-MailboxFolderStatistics -Identity $EmailAddress
         
-        # Check folder count
+        # Common processing logic
         $folderCount = $folderStats.Count
         $Results.FolderCount = $folderCount
         
-        # Check for deep folder hierarchy (more than 10 levels might cause issues)
-        $deepFolders = $folderStats | Where-Object { ($_.FolderPath.Split('/').Count - 1) -gt 10 }
+        # Check for folder count limits
+        $maxFolderLimit = $script:Config.MaxFolderLimit ?? 10000
+        if ($folderCount -gt $maxFolderLimit) {
+            $Results.Warnings += "Mailbox has an excessive number of folders ($folderCount), which might cause migration issues"
+            Write-Log -Message "Warning: Mailbox $EmailAddress has an excessive number of folders: $folderCount" -Level "WARNING"
+            Write-Log -Message "Recommendation: Consider cleaning up unnecessary folders before migration" -Level "INFO"
+        }
         
-        if ($deepFolders) {
-            $Results.HasDeepFolderHierarchy = $true
-            $Results.DeepFolders = $deepFolders | Select-Object Name, FolderPath, ItemsInFolder
-            $Results.Warnings += "Mailbox has deeply nested folders that might cause migration issues"
-            $Results.ErrorCodes += "ERR023"
+        # Check for deep folder hierarchy
+        $deepFolders = @()
+        $maxDepth = $script:Config.MaxTotalFolderDepth ?? 10
+        
+        foreach ($folder in $folderStats) {
+            # Calculate folder depth by counting path separators
+            $depth = ($folder.FolderPath.Split('/').Count - 1)
             
-            Write-Log -Message "Warning: Mailbox $EmailAddress has deeply nested folders:" -Level "WARNING" -ErrorCode "ERR023"
-            foreach ($folder in $deepFolders | Select-Object -First 5) {
-                $depth = $folder.FolderPath.Split('/').Count - 1
-                Write-Log -Message "  - $($folder.FolderPath) (Depth: $depth, Items: $($folder.ItemsInFolder))" -Level "WARNING"
+            if ($depth -gt $maxDepth) {
+                $deepFolders += [PSCustomObject]@{
+                    Name = $folder.Name
+                    FolderPath = $folder.FolderPath
+                    ItemsInFolder = $folder.ItemsInFolder
+                    Depth = $depth
+                }
+            }
+        }
+        
+        if ($deepFolders.Count -gt 0) {
+            $Results.HasDeepFolderHierarchy = $true
+            $Results.DeepFolders = $deepFolders
+            $Results.Warnings += "Mailbox has deeply nested folders that might cause migration issues"
+            $Results.ErrorCodes += "ERR034"
+            
+            Write-Log -Message "Warning: Mailbox $EmailAddress has deeply nested folders:" -Level "WARNING" -ErrorCode "ERR034"
+            foreach ($folder in ($deepFolders | Select-Object -First 5)) {
+                Write-Log -Message "  - $($folder.FolderPath) (Depth: $($folder.Depth), Items: $($folder.ItemsInFolder))" -Level "WARNING"
             }
             
             if ($deepFolders.Count -gt 5) {
@@ -66,23 +101,35 @@ function Test-MailboxFolderStructure {
         }
         
         # Check for large folders (more than 5000 items might cause performance issues)
-        $largeFolders = $folderStats | Where-Object { $_.ItemsInFolder -gt 5000 }
+        $largeFolders = @()
+        $maxItemsPerFolder = $script:Config.MaxItemsPerFolderLimit ?? 100000
+        $warningItemsPerFolder = $maxItemsPerFolder / 2
         
-        if ($largeFolders) {
+        foreach ($folder in $folderStats) {
+            if ($folder.ItemsInFolder -gt $warningItemsPerFolder) {
+                $largeFolders += [PSCustomObject]@{
+                    Name = $folder.Name
+                    FolderPath = $folder.FolderPath
+                    ItemsInFolder = $folder.ItemsInFolder
+                }
+            }
+        }
+        
+        if ($largeFolders.Count -gt 0) {
             $Results.HasLargeFolders = $true
-            $Results.LargeFolders = $largeFolders | Select-Object Name, FolderPath, ItemsInFolder
+            $Results.LargeFolders = $largeFolders
             
-            $veryLargeFolders = $largeFolders | Where-Object { $_.ItemsInFolder -gt 50000 }
+            $veryLargeFolders = $largeFolders | Where-Object { $_.ItemsInFolder -gt $maxItemsPerFolder }
             if ($veryLargeFolders) {
-                $Results.Warnings += "Mailbox has folders with more than 50,000 items, which might cause migration issues"
-                $Results.ErrorCodes += "ERR024"
-                Write-Log -Message "Warning: Mailbox $EmailAddress has folders with extremely high item counts:" -Level "WARNING" -ErrorCode "ERR024"
+                $Results.Warnings += "Mailbox has folders with more than $($maxItemsPerFolder) items, which might cause migration issues"
+                $Results.ErrorCodes += "ERR035"
+                Write-Log -Message "Warning: Mailbox $EmailAddress has folders with extremely high item counts:" -Level "WARNING" -ErrorCode "ERR035"
             }
             else {
                 Write-Log -Message "Note: Mailbox $EmailAddress has folders with high item counts:" -Level "INFO"
             }
             
-            foreach ($folder in $largeFolders | Sort-Object ItemsInFolder -Descending | Select-Object -First 5) {
+            foreach ($folder in ($largeFolders | Sort-Object ItemsInFolder -Descending | Select-Object -First 5)) {
                 Write-Log -Message "  - $($folder.FolderPath): $($folder.ItemsInFolder) items" -Level "INFO"
             }
             
@@ -117,11 +164,33 @@ function Test-MailboxFolderStructure {
         if ($longNameFolders) {
             $Results.Warnings += "Mailbox has folders with very long names that might cause issues during migration"
             Write-Log -Message "Warning: Mailbox $EmailAddress has folders with very long names:" -Level "WARNING"
-            foreach ($folder in $longNameFolders | Select-Object -First 3) {
+            foreach ($folder in ($longNameFolders | Select-Object -First 3)) {
                 Write-Log -Message "  - Folder with name length $($folder.Name.Length) chars: $($folder.FolderPath)" -Level "WARNING"
             }
             
             Write-Log -Message "Recommendation: Consider renaming folders with extremely long names" -Level "INFO"
+        }
+        
+        # Check for problematic folder names (special characters)
+        $problemFolders = $folderStats | Where-Object { 
+            $_.Name -match '[<>:"\/\\|?*]' -or
+            $_.Name -match '^\s+' -or     # Leading spaces
+            $_.Name -match '\s+$'        # Trailing spaces
+        }
+        
+        if ($problemFolders) {
+            $Results.Warnings += "Mailbox has folders with problematic names (special characters or leading/trailing spaces)"
+            Write-Log -Message "Warning: Mailbox $EmailAddress has folders with problematic characters:" -Level "WARNING"
+            
+            foreach ($folder in ($problemFolders | Select-Object -First 3)) {
+                Write-Log -Message "  - Problematic folder name: '$($folder.Name)': $($folder.FolderPath)" -Level "WARNING"
+            }
+            
+            if ($problemFolders.Count -gt 3) {
+                Write-Log -Message "  - ... and $($problemFolders.Count - 3) more problematic folder names" -Level "WARNING"
+            }
+            
+            Write-Log -Message "Recommendation: Rename folders with special characters before migration" -Level "INFO"
         }
         
         return $true

@@ -6,6 +6,7 @@ function Test-RecoverableItemsSize {
     .DESCRIPTION
         Analyzes the size of the Recoverable Items folder to identify potential issues
         during migration, such as exceeding quota limits or causing migration delays.
+        Works with both on-premises Exchange and Exchange Online mailboxes.
     
     .PARAMETER EmailAddress
         The email address of the mailbox to test.
@@ -13,9 +14,17 @@ function Test-RecoverableItemsSize {
     .PARAMETER Results
         A PSCustomObject that collects the validation results.
     
+    .PARAMETER OnPremises
+        When specified, treats the mailbox as an on-premises mailbox.
+        Otherwise, assumes Exchange Online mailbox.
+    
     .EXAMPLE
         $results = New-MailboxTestResult -EmailAddress "user@contoso.com"
         Test-RecoverableItemsSize -EmailAddress "user@contoso.com" -Results $results
+    
+    .EXAMPLE
+        $results = New-MailboxTestResult -EmailAddress "user@contoso.com"
+        Test-RecoverableItemsSize -EmailAddress "user@contoso.com" -Results $results -OnPremises
     
     .OUTPUTS
         [bool] Returns $true if the test was successful (even if issues were found), $false if the test failed.
@@ -26,7 +35,10 @@ function Test-RecoverableItemsSize {
         [string]$EmailAddress,
         
         [Parameter(Mandatory = $true)]
-        [PSCustomObject]$Results
+        [PSCustomObject]$Results,
+        
+        [Parameter(Mandatory = $false)]
+        [switch]$OnPremises
     )
     
     if (-not ($script:Config.CheckRecoverableItemsSize)) {
@@ -35,9 +47,10 @@ function Test-RecoverableItemsSize {
     }
 
     try {
-        Write-Log -Message "Checking recoverable items folder size for: $EmailAddress" -Level "INFO"
+        $envType = if ($OnPremises) { "on-premises" } else { "Exchange Online" }
+        Write-Log -Message "Checking $envType recoverable items folder size for: $EmailAddress" -Level "INFO"
         
-        # Get folder statistics for the mailbox
+        # Get folder statistics for the mailbox (works the same in both environments)
         $folderStats = Get-MailboxFolderStatistics -Identity $EmailAddress -FolderScope RecoverableItems -ErrorAction Stop
         
         if ($folderStats) {
@@ -57,30 +70,55 @@ function Test-RecoverableItemsSize {
                     continue
                 }
                 
-                # Get size in bytes
-                if ($folder.FolderSize -match "([0-9,.]+)\s+(B|KB|MB|GB)") {
-                    $sizeValue = [double]($Matches[1] -replace ',', '')
-                    $sizeUnit = $Matches[2]
-                    
-                    # Convert to bytes
-                    switch ($sizeUnit) {
-                        "B" { $sizeBytes = $sizeValue }
-                        "KB" { $sizeBytes = $sizeValue * 1KB }
-                        "MB" { $sizeBytes = $sizeValue * 1MB }
-                        "GB" { $sizeBytes = $sizeValue * 1GB }
-                        default { $sizeBytes = 0 }
+                # Get size in bytes - with on-premises vs cloud format handling
+                if ($OnPremises -and $folder.FolderAndSubfolderSize) {
+                    # Parse size from on-premises format
+                    if ($folder.FolderAndSubfolderSize -match "([0-9,.]+)\s+(B|KB|MB|GB)") {
+                        $sizeValue = [double]($Matches[1] -replace ',', '')
+                        $sizeUnit = $Matches[2]
+                        
+                        # Convert to bytes
+                        $sizeBytes = switch ($sizeUnit) {
+                            "B" { $sizeValue }
+                            "KB" { $sizeValue * 1KB }
+                            "MB" { $sizeValue * 1MB }
+                            "GB" { $sizeValue * 1GB }
+                            default { 0 }
+                        }
+                        
+                        $totalSizeBytes += $sizeBytes
+                        $totalItems += $folder.ItemsInFolderAndSubfolders
                     }
-                    
-                    $totalSizeBytes += $sizeBytes
-                    $totalItems += $folder.ItemsInFolder
-                    
-                    # Add folder details
-                    $folderDetails += [PSCustomObject]@{
-                        FolderPath = $folder.FolderPath
-                        ItemCount = $folder.ItemsInFolder
-                        FolderSize = $folder.FolderSize
-                        SizeBytes = $sizeBytes
+                }
+                elseif (-not $OnPremises -and $folder.FolderSize -ne "0 B") {
+                    # Parse size from cloud format
+                    if ($folder.FolderSize -match "([0-9,.]+)\s+(B|KB|MB|GB)") {
+                        $sizeValue = [double]($Matches[1] -replace ',', '')
+                        $sizeUnit = $Matches[2]
+                        
+                        # Convert to bytes
+                        $sizeBytes = switch ($sizeUnit) {
+                            "B" { $sizeValue }
+                            "KB" { $sizeValue * 1KB }
+                            "MB" { $sizeValue * 1MB }
+                            "GB" { $sizeValue * 1GB }
+                            default { 0 }
+                        }
+                        
+                        $totalSizeBytes += $sizeBytes
+                        $totalItems += $folder.ItemsInFolder
                     }
+                }
+                
+                # Create common folder details object
+                $itemCount = if ($OnPremises) { $folder.ItemsInFolderAndSubfolders } else { $folder.ItemsInFolder }
+                $sizeProperty = if ($OnPremises) { $folder.FolderAndSubfolderSize } else { $folder.FolderSize }
+                
+                $folderDetails += [PSCustomObject]@{
+                    FolderPath = $folder.FolderPath
+                    ItemCount = $itemCount
+                    FolderSize = $sizeProperty
+                    SizeBytes = $sizeBytes
                 }
             }
             
@@ -95,7 +133,9 @@ function Test-RecoverableItemsSize {
             # Check if size exceeds threshold
             if ($Results.RecoverableItemsFolderSizeGB -gt $sizeThresholdGB) {
                 $Results.Warnings += "Recoverable Items folder is very large ($($Results.RecoverableItemsFolderSizeGB) GB), which may delay migration"
-                Write-Log -Message "Warning: Mailbox $EmailAddress has a large Recoverable Items folder ($($Results.RecoverableItemsFolderSizeGB) GB)" -Level "WARNING"
+                $Results.ErrorCodes += "ERR062"
+                
+                Write-Log -Message "Warning: Mailbox $EmailAddress has a large Recoverable Items folder ($($Results.RecoverableItemsFolderSizeGB) GB)" -Level "WARNING" -ErrorCode "ERR062"
                 Write-Log -Message "Recommendation: Consider clearing litigation hold or using New-ComplianceSearch to export data before migration" -Level "INFO"
             }
             else {
@@ -115,6 +155,19 @@ function Test-RecoverableItemsSize {
             if ($purgesFolder -and ($purgesFolder.SizeBytes / 1GB) -gt 3) {
                 $Results.Warnings += "Purges folder is large ($([math]::Round($purgesFolder.SizeBytes / 1GB, 2)) GB), which may indicate retention policy issues"
                 Write-Log -Message "Warning: Purges folder is large ($([math]::Round($purgesFolder.SizeBytes / 1GB, 2)) GB) for $EmailAddress" -Level "WARNING"
+            }
+            
+            # Check mailbox for retention and litigation holds
+            $mailbox = Get-Mailbox -Identity $EmailAddress -ErrorAction SilentlyContinue
+            if ($mailbox -and ($mailbox.LitigationHoldEnabled -or $mailbox.RetentionHoldEnabled)) {
+                $Results.Warnings += "Mailbox has " + 
+                    $(if ($mailbox.LitigationHoldEnabled) {"litigation hold"} else {""}) + 
+                    $(if ($mailbox.LitigationHoldEnabled -and $mailbox.RetentionHoldEnabled) {" and "} else {""}) +
+                    $(if ($mailbox.RetentionHoldEnabled) {"retention hold"} else {""}) + 
+                    " enabled, which may cause large Recoverable Items folders"
+                
+                Write-Log -Message "Warning: Mailbox $EmailAddress has holds enabled that may impact Recoverable Items size" -Level "WARNING"
+                Write-Log -Message "Recommendation: Review hold settings and determine if they need to be preserved" -Level "INFO"
             }
         }
         else {

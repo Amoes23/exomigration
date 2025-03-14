@@ -7,6 +7,7 @@ function Test-CalendarAndContactItems {
         Analyzes calendar and contact items in a mailbox to identify potential
         migration issues such as shared calendars, high meeting counts, or
         permissions that may need special handling during migration.
+        Works with both on-premises Exchange and Exchange Online mailboxes.
     
     .PARAMETER EmailAddress
         The email address of the mailbox to test.
@@ -14,9 +15,17 @@ function Test-CalendarAndContactItems {
     .PARAMETER Results
         A PSCustomObject that collects the validation results.
     
+    .PARAMETER OnPremises
+        When specified, treats the mailbox as an on-premises mailbox.
+        Otherwise, assumes Exchange Online mailbox.
+    
     .EXAMPLE
         $results = New-MailboxTestResult -EmailAddress "user@contoso.com"
         Test-CalendarAndContactItems -EmailAddress "user@contoso.com" -Results $results
+    
+    .EXAMPLE
+        $results = New-MailboxTestResult -EmailAddress "user@contoso.com"
+        Test-CalendarAndContactItems -EmailAddress "user@contoso.com" -Results $results -OnPremises
     
     .OUTPUTS
         [bool] Returns $true if the test was successful (even if issues were found), $false if the test failed.
@@ -27,13 +36,17 @@ function Test-CalendarAndContactItems {
         [string]$EmailAddress,
         
         [Parameter(Mandatory = $true)]
-        [PSCustomObject]$Results
+        [PSCustomObject]$Results,
+        
+        [Parameter(Mandatory = $false)]
+        [switch]$OnPremises
     )
     
     try {
-        Write-Log -Message "Checking calendar and contact items: $EmailAddress" -Level "INFO"
+        $envType = if ($OnPremises) { "on-premises" } else { "Exchange Online" }
+        Write-Log -Message "Checking $envType calendar and contact items: $EmailAddress" -Level "INFO"
         
-        # Get folder statistics
+        # Get folder statistics - works in both environments
         $folderStats = Get-MailboxFolderStatistics -Identity $EmailAddress
         
         # Check calendar folders - using FolderType property which is locale-independent
@@ -111,10 +124,10 @@ function Test-CalendarAndContactItems {
             $Results.HasSharedCalendars = $true
             $Results.CalendarPermissions = $calendarPermissions
             $Results.Warnings += "Mailbox has shared calendars with custom permissions that need to be recreated post-migration"
-            $Results.ErrorCodes += "ERR025"
+            $Results.ErrorCodes += "ERR036"
             
-            Write-Log -Message "Warning: Mailbox $EmailAddress has shared calendars with custom permissions:" -Level "WARNING" -ErrorCode "ERR025"
-            foreach ($perm in $calendarPermissions | Select-Object -First 5) {
+            Write-Log -Message "Warning: Mailbox $EmailAddress has shared calendars with custom permissions:" -Level "WARNING" -ErrorCode "ERR036"
+            foreach ($perm in ($calendarPermissions | Select-Object -First 5)) {
                 Write-Log -Message "  - $($perm.FolderPath): Shared with $($perm.User) ($($perm.AccessRights))" -Level "WARNING"
             }
             
@@ -134,6 +147,41 @@ function Test-CalendarAndContactItems {
             $Results.Warnings += "Mailbox has a large number of calendar items ($($Results.CalendarItemCount)), which may include many recurring meetings"
             Write-Log -Message "Warning: Mailbox $EmailAddress has a large number of calendar items: $($Results.CalendarItemCount)" -Level "WARNING"
             Write-Log -Message "Recommendation: Consider cleaning up old calendar items before migration" -Level "INFO"
+        }
+        
+        # Check for calendar processing settings (for room mailboxes)
+        if ($mailbox.RecipientTypeDetails -eq "RoomMailbox" -or $mailbox.RecipientTypeDetails -eq "EquipmentMailbox") {
+            try {
+                $calendarProcessing = Get-CalendarProcessing -Identity $mailbox.Identity
+                
+                if ($calendarProcessing) {
+                    # Check for custom calendar processing settings
+                    $hasCustomSettings = 
+                        $calendarProcessing.AutomateProcessing -ne "AutoAccept" -or
+                        $calendarProcessing.AllowConflicts -eq $true -or
+                        $calendarProcessing.BookingWindowInDays -ne 180 -or
+                        $calendarProcessing.MaximumDurationInMinutes -ne 1440
+                        
+                    if ($hasCustomSettings) {
+                        $Results.Warnings += "Room mailbox has custom calendar processing settings that need to be recreated post-migration"
+                        Write-Log -Message "Warning: Room mailbox $EmailAddress has custom calendar processing settings" -Level "WARNING"
+                        Write-Log -Message "Recommendation: Document these settings and reconfigure them after migration" -Level "INFO"
+                    }
+                    
+                    # Check for calendar delegates
+                    if ($calendarProcessing.ResourceDelegates -and $calendarProcessing.ResourceDelegates.Count -gt 0) {
+                        $Results.Warnings += "Room mailbox has custom resource delegates that need to be recreated post-migration"
+                        Write-Log -Message "Warning: Room mailbox $EmailAddress has the following resource delegates:" -Level "WARNING"
+                        foreach ($delegate in $calendarProcessing.ResourceDelegates) {
+                            Write-Log -Message "  - $delegate" -Level "WARNING"
+                        }
+                        Write-Log -Message "Recommendation: Document these delegates and reconfigure them after migration" -Level "INFO"
+                    }
+                }
+            }
+            catch {
+                Write-Log -Message "Failed to get calendar processing information: $_" -Level "WARNING"
+            }
         }
         
         # Check contacts folders

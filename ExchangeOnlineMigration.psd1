@@ -4,7 +4,7 @@
     RootModule = 'ExchangeOnlineMigration.psm1'
     
     # Version number of this module.
-    ModuleVersion = '3.0.0'
+    ModuleVersion = '3.1.0'
     
     # Supported PSEditions
     CompatiblePSEditions = @('Desktop', 'Core')
@@ -22,7 +22,7 @@
     Copyright = '(c) 2025. All rights reserved.'
     
     # Description of the functionality provided by this module
-    Description = 'A comprehensive PowerShell module for migrating mailboxes from on-premises Exchange to Exchange Online'
+    Description = 'A comprehensive PowerShell module for migrating mailboxes between Exchange environments'
     
     # Minimum version of the PowerShell engine required by this module
     PowerShellVersion = '5.1'
@@ -43,10 +43,11 @@
     # ProcessorArchitecture = ''
     
     # Modules that must be imported into the global environment prior to importing this module
-    # RequiredModules = @(
-    #    @{ModuleName = 'ExchangeOnlineManagement'; ModuleVersion = '3.0.0'},
-    #    @{ModuleName = 'Microsoft.Graph'; ModuleVersion = '1.20.0'}
-    #)
+    RequiredModules = @(
+        @{ModuleName = 'ExchangeOnlineManagement'; ModuleVersion = '3.0.0'},
+        @{ModuleName = 'Microsoft.Graph'; ModuleVersion = '1.20.0'},
+        @{ModuleName = 'Microsoft.Graph.Users'; ModuleVersion = '1.20.0'}
+    )
     
     # Assemblies that must be loaded prior to importing this module
     # RequiredAssemblies = @()
@@ -98,7 +99,7 @@
     PrivateData = @{
         PSData = @{
             # Tags applied to this module. These help with module discovery in online galleries.
-            Tags = @('Exchange', 'Migration', 'Office365', 'ExchangeOnline', 'Mailbox')
+            Tags = @('Exchange', 'Migration', 'Office365', 'ExchangeOnline', 'Mailbox', 'Hybrid')
             
             # A URL to the license for this module.
             # LicenseUri = ''
@@ -111,6 +112,15 @@
             
             # ReleaseNotes of this module
             ReleaseNotes = @'
+# Version 3.1.0
+- Added unified architecture for bidirectional migrations
+- Consolidated duplicate functions for on-premises and cloud environments
+- Added support for cross-tenant migrations
+- Enhanced error handling and connection management
+- Improved performance for large migrations
+- Added comprehensive unified validation test catalog
+- Enhanced reporting with directional migration information
+
 # Version 3.0.0
 - Complete rewrite as proper PowerShell module
 - Added tiered validation levels (Basic, Standard, Comprehensive)

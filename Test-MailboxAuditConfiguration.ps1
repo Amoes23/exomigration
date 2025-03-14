@@ -5,8 +5,9 @@ function Test-MailboxAuditConfiguration {
     
     .DESCRIPTION
         Checks if a mailbox has custom audit log settings that need to be preserved
-        during migration to Exchange Online. Identifies audit configurations that
+        during migration. Identifies audit configurations that
         might need to be reconfigured after migration.
+        Works with both on-premises Exchange and Exchange Online mailboxes.
     
     .PARAMETER EmailAddress
         The email address of the mailbox to test.
@@ -14,9 +15,17 @@ function Test-MailboxAuditConfiguration {
     .PARAMETER Results
         A PSCustomObject that collects the validation results.
     
+    .PARAMETER OnPremises
+        When specified, treats the mailbox as an on-premises mailbox.
+        Otherwise, assumes Exchange Online mailbox.
+    
     .EXAMPLE
         $results = New-MailboxTestResult -EmailAddress "user@contoso.com"
         Test-MailboxAuditConfiguration -EmailAddress "user@contoso.com" -Results $results
+    
+    .EXAMPLE
+        $results = New-MailboxTestResult -EmailAddress "user@contoso.com"
+        Test-MailboxAuditConfiguration -EmailAddress "user@contoso.com" -Results $results -OnPremises
     
     .OUTPUTS
         [bool] Returns $true if the test was successful (even if issues were found), $false if the test failed.
@@ -27,7 +36,10 @@ function Test-MailboxAuditConfiguration {
         [string]$EmailAddress,
         
         [Parameter(Mandatory = $true)]
-        [PSCustomObject]$Results
+        [PSCustomObject]$Results,
+        
+        [Parameter(Mandatory = $false)]
+        [switch]$OnPremises
     )
     
     if (-not ($script:Config.CheckForAuditLogConfiguration)) {
@@ -36,7 +48,8 @@ function Test-MailboxAuditConfiguration {
     }
 
     try {
-        Write-Log -Message "Checking mailbox audit configuration for: $EmailAddress" -Level "INFO"
+        $envType = if ($OnPremises) { "on-premises" } else { "Exchange Online" }
+        Write-Log -Message "Checking $envType mailbox audit configuration for: $EmailAddress" -Level "INFO"
         
         # Get mailbox audit settings
         $mailbox = Get-Mailbox -Identity $EmailAddress -ErrorAction Stop
@@ -54,19 +67,38 @@ function Test-MailboxAuditConfiguration {
         
         # Check audit log age limit
         if ($mailbox.AuditLogAgeLimit) {
-            $Results.AuditLogAgeLimit = $mailbox.AuditLogAgeLimit.Days
+            if ($OnPremises) {
+                # Parse the timespan for on-premises (comes as dd.hh:mm:ss format in on-premises)
+                if ($mailbox.AuditLogAgeLimit -match "^(\d+)\.") {
+                    $Results.AuditLogAgeLimit = [int]$Matches[1]
+                }
+                else {
+                    # If format is different, try to convert to days another way
+                    try {
+                        $timespan = [TimeSpan]::Parse($mailbox.AuditLogAgeLimit.ToString())
+                        $Results.AuditLogAgeLimit = $timespan.Days
+                    }
+                    catch {
+                        Write-Log -Message "Could not parse AuditLogAgeLimit: $($mailbox.AuditLogAgeLimit)" -Level "WARNING"
+                    }
+                }
+            }
+            else {
+                # Exchange Online - can use Days property
+                $Results.AuditLogAgeLimit = $mailbox.AuditLogAgeLimit.Days
+            }
         }
         
         # Check audit action settings
-        if ($mailbox.AuditOwnerRules) {
+        if ($mailbox.AuditOwner) {
             $Results.AuditOwner = $mailbox.AuditOwner
         }
         
-        if ($mailbox.AuditAdminRules) {
+        if ($mailbox.AuditAdmin) {
             $Results.AuditAdmin = $mailbox.AuditAdmin
         }
         
-        if ($mailbox.AuditDelegateRules) {
+        if ($mailbox.AuditDelegate) {
             $Results.AuditDelegate = $mailbox.AuditDelegate
         }
         
@@ -121,7 +153,7 @@ function Test-MailboxAuditConfiguration {
                 Write-Log -Message "  - Custom delegate audit actions: $($Results.AuditDelegate -join ', ')" -Level "WARNING"
             }
             
-            Write-Log -Message "Recommendation: Document these settings and reconfigure them in Exchange Online after migration" -Level "INFO"
+            Write-Log -Message "Recommendation: Document these settings and reconfigure them after migration" -Level "INFO"
         }
         
         return $true
